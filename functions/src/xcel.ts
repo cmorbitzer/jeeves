@@ -1,7 +1,8 @@
 import { onRequest } from 'firebase-functions/v2/https';
 import * as logger from 'firebase-functions/logger';
-import { chromium } from 'playwright';
+import { chromium as playwright } from 'playwright';
 import * as fs from 'fs';
+import chromium = require('@sparticuz/chromium');
 
 /**
  * Download an Xcel Energy statement for the given account.
@@ -17,7 +18,8 @@ import * as fs from 'fs';
 export const downloadXcelStatement = onRequest(
   {
     cors: true,
-    timeoutSeconds: 60,
+    memory: '2GiB',
+    timeoutSeconds: 120,
     secrets: ['XCEL_USERNAME', 'XCEL_PASSWORD'],
   },
   async (request, response) => {
@@ -28,7 +30,14 @@ export const downloadXcelStatement = onRequest(
 
     const accountNumberDigits = accountNumber.match(/\d+/)![0];
 
-    const browser = await chromium.launch();
+    const browser = await playwright.launch({
+      executablePath: await chromium.executablePath(),
+      args: chromium.args,
+      headless: true,
+    });
+
+    logger.debug('Launched browser');
+
     const context = await browser.newContext();
     const page = await context.newPage();
 
