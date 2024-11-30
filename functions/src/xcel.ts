@@ -2,7 +2,10 @@ import { onRequest } from 'firebase-functions/v2/https';
 import * as logger from 'firebase-functions/logger';
 import { chromium as playwright } from 'playwright';
 import * as fs from 'fs';
-import chromium = require('@sparticuz/chromium');
+
+if (process.env.NODE_ENV === 'production') {
+  var chromium = require('@sparticuz/chromium');
+}
 
 /**
  * Download an Xcel Energy statement for the given account.
@@ -30,11 +33,15 @@ export const downloadXcelStatement = onRequest(
 
     const accountNumberDigits = accountNumber.match(/\d+/)![0];
 
-    const browser = await playwright.launch({
-      executablePath: await chromium.executablePath(),
-      args: chromium.args,
-      headless: true,
-    });
+    const browser = await playwright.launch(
+      chromium
+        ? {
+            executablePath: await chromium.executablePath(),
+            args: chromium.args,
+            headless: true,
+          }
+        : {},
+    );
 
     logger.debug('Launched browser');
 
