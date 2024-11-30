@@ -1,0 +1,17 @@
+{
+  "name": "jeeves",
+  "version": "0.0.1",
+  "scripts": {},
+  "keywords": [],
+  "author": "Chris Morbitzer <chris.morbitzer@gmail.com>",
+  "description": "",
+  "devDependencies": {
+    "@types/node": "^22.10.1",
+    "prettier": "^3.4.1"
+  },
+  "dependencies": {
+    "firebase-admin": "^13.0.1",
+    "firebase-functions": "^6.1.1"
+  },
+  "private": true
+}
