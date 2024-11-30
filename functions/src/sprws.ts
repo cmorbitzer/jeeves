@@ -1,13 +1,19 @@
 import { onRequest } from 'firebase-functions/v2/https';
 import * as logger from 'firebase-functions/logger';
-import { chromium as playwright } from 'playwright';
 import * as fs from 'fs';
+import { pipePdfDownloadToResponse, withBrowser } from './util/browser';
 
-if (process.env.NODE_ENV === 'production') {
-  var chromium = require('@sparticuz/chromium');
-}
-
-export const downloadSPRWSStatement = onRequest(
+/**
+ * Download the most recent Saint Paul Regional Water Services statement for the given account.
+ *
+ * @param accountNumber The account number to download the statement for.
+ *
+ * @requires SPRWS_USERNAME The username to log in to the SPRWS website.
+ * @requires SPRWS_PASSWORD The password to log in to the SPRWS website.
+ *
+ * @returns The PDF file of the statement.
+ */
+export const downloadSprwsStatement = onRequest(
   {
     cors: true,
     memory: '2GiB',
@@ -19,79 +25,64 @@ export const downloadSPRWSStatement = onRequest(
 
     const accountNumber = request.query.accountNumber as string;
 
-    const browser = await playwright.launch(
-      chromium
-        ? {
-            executablePath: await chromium.executablePath(),
-            args: chromium.args,
-            headless: true,
-          }
-        : {},
-    );
+    await withBrowser(async ({ page }) => {
+      // Navigate to the login page
+      await page.goto('https://billpay.saintpaulwater.com/LinkLogin.aspx');
 
-    logger.debug('Launched browser');
+      // Fill in the login form
+      await page.getByLabel('Username:').fill(process.env.SPRWS_USERNAME!);
+      await page.getByLabel('Password:').fill(process.env.SPRWS_PASSWORD!);
+      await page.locator('#dnn_ctr738_Login_Login_DNN_cmdLogin').click();
 
-    const context = await browser.newContext();
-    const page = await context.newPage();
+      // Wait for successful login and navigation to the home page, so the current account number can be checked below
+      await page.waitForURL('https://billpay.saintpaulwater.com/Home.aspx', {
+        timeout: 10000,
+      });
 
-    await page.goto('https://billpay.saintpaulwater.com/LinkLogin.aspx');
-    await page.getByLabel('Username:').fill(process.env.SPRWS_USERNAME!);
-    await page.getByLabel('Password:').fill(process.env.SPRWS_PASSWORD!);
-    await page.locator('#dnn_ctr738_Login_Login_DNN_cmdLogin').click();
-    await page.waitForURL('https://billpay.saintpaulwater.com/Home.aspx', {
-      timeout: 10000,
-    });
-    logger.debug('Logged in');
+      logger.debug('Logged in');
 
-    if (
-      (await page.locator('#dnn_INFOPOPUP1_lblAcctNum').textContent()) !==
-      accountNumber
-    ) {
-      logger.debug('Navigating to account');
+      // If the current account number is not the one requested, navigate to the requested account
+      if (
+        (await page.locator('#dnn_INFOPOPUP1_lblAcctNum').textContent()) !==
+        accountNumber
+      ) {
+        logger.debug('Navigating to account');
 
-      await page.getByRole('link', { name: 'List Accounts' }).click();
-      logger.debug('Navigated to account list');
+        await page.getByRole('link', { name: 'List Accounts' }).click();
+        logger.debug('Navigated to account list');
 
-      await page.getByRole('link', { name: accountNumber }).click();
-      logger.debug('Navigated to account');
-    }
+        await page.getByRole('link', { name: accountNumber }).click();
+        logger.debug('Navigated to account');
 
-    await page.getByRole('link', { name: 'Billing History' }).click();
-    logger.debug('Navigated to billing history');
+        await page.getByRole('link', { name: 'Billing History' }).click();
+        logger.debug('Navigated to billing history');
+      }
 
-    const downloadLinkLocator = page
-      .locator('#dnn_ctr378_BillingHistory_GridView1')
-      .getByRole('row')
-      .nth(1)
-      .getByRole('link', { name: 'View' });
+      // Find the download link for the most recent billing period
+      const downloadLinkLocator = page
+        .locator('#dnn_ctr378_BillingHistory_GridView1')
+        .getByRole('row')
+        .nth(1)
+        .getByRole('link', { name: 'View' });
 
-    if (await downloadLinkLocator.count()) {
+      // If there is no download link for the most recent billing period, return a 404 response
+      if (!(await downloadLinkLocator.count())) {
+        response.status(404).send('No recent statement found');
+        return;
+      }
+
       const downloadPromise = page.waitForEvent('download');
-
       await downloadLinkLocator.click();
       logger.debug('Clicked download link');
-
       const download = await downloadPromise;
-      const filePath = await download.path();
 
-      if (fs.statSync(filePath).size < 1000) {
+      // If the downloaded file is too small, there is a problem with the eBill. Return a 500 response
+      if (fs.statSync(await download.path()).size < 1000) {
         response.status(500).send('Downloaded file is too small');
-      } else {
-        response.setHeader('Content-Type', 'application/pdf');
-        response.setHeader(
-          'Content-Disposition',
-          `attachment; filename=${download.suggestedFilename()}`,
-        );
-        const fileStream = fs.createReadStream(filePath);
-        fileStream.pipe(response);
-
-        logger.debug('Downloaded statement');
+        return;
       }
-    } else {
-      response.status(404).send('No recent statement found');
-    }
 
-    await context.close();
-    await browser.close();
+      await pipePdfDownloadToResponse(download, response);
+    });
   },
 );

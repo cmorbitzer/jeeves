@@ -1,17 +1,12 @@
 import { onRequest } from 'firebase-functions/v2/https';
 import * as logger from 'firebase-functions/logger';
-import { chromium as playwright } from 'playwright';
-import * as fs from 'fs';
-
-if (process.env.NODE_ENV === 'production') {
-  var chromium = require('@sparticuz/chromium');
-}
+import { pipePdfDownloadToResponse, withBrowser } from './util/browser';
 
 /**
  * Download an Xcel Energy statement for the given account.
  *
  * @param accountNumber The account number to download the statement for. The number may be obscured in the format XX-12345678-XX.
- * @param statementDate The date of the statement to download in the format YYYYMMDD.
+ * @param statementDate The date of the statement to download in the format YYYY-MM-DD.
  *
  * @requires XCEL_USERNAME The username to log in to the Xcel Energy website.
  * @requires XCEL_PASSWORD The password to log in to the Xcel Energy website.
@@ -31,82 +26,55 @@ export const downloadXcelStatement = onRequest(
     const accountNumber = request.query.accountNumber as string;
     const statementDate = request.query.statementDate as string;
 
-    const accountNumberDigits = accountNumber.match(/\d+/)![0];
+    // Extract the main part of the account number, which is not obscured in email notifications
+    const accountNumberDigits = accountNumber.match(/-\d+-/)![0].slice(1, -1);
 
-    const browser = await playwright.launch(
-      chromium
-        ? {
-            executablePath: await chromium.executablePath(),
-            args: chromium.args,
-            headless: true,
-          }
-        : {},
-    );
+    await withBrowser(async ({ page }) => {
+      // Navigate to the login page
+      await page.goto(
+        'https://my.xcelenergy.com/MyAccount/XE_Login?template=XE_MA_Template',
+      );
 
-    logger.debug('Launched browser');
+      // Fill in the login form
+      await page.getByLabel('Email/Username*').fill(process.env.XCEL_USERNAME!);
+      await page.getByLabel('Password*').fill(process.env.XCEL_PASSWORD!);
+      await page.getByRole('button', { name: 'Sign In' }).click();
+      logger.debug('Logged in');
 
-    const context = await browser.newContext();
-    const page = await context.newPage();
+      // Select the correct account to view the billing history for
+      await page
+        .getByRole('row', { name: accountNumberDigits })
+        .getByRole('link', { name: 'Manage Account' })
+        .click();
+      logger.debug('Navigated to account');
 
-    await page.goto(
-      'https://my.xcelenergy.com/MyAccount/XE_Login?template=XE_MA_Template',
-    );
+      // Navigate to the billing history page
+      await page.getByRole('link', { name: 'Billing', exact: true }).click();
+      logger.debug('Navigated to billing');
 
-    await page.getByLabel('Email/Username*').fill(process.env.XCEL_USERNAME!);
-    await page.getByLabel('Password*').fill(process.env.XCEL_PASSWORD!);
-    await page.getByRole('button', { name: 'Sign In' }).click();
-    logger.debug('Logged in');
+      // Navigate to the statements tab
+      await page.getByRole('tab', { name: 'Statements' }).click();
+      logger.debug('Navigated to statements');
 
-    await page
-      .getByRole('row', { name: accountNumberDigits })
-      .getByRole('link', { name: 'Manage Account' })
-      .click();
-    logger.debug('Navigated to account');
+      // Reformat the statement date to match the format displayed on the website
+      const formattedDate = new Date(statementDate)
+        .toLocaleDateString('en-US', {
+          year: 'numeric',
+          month: 'short',
+          day: 'numeric',
+        })
+        .toUpperCase();
+      logger.debug(`Looking for statement from ${formattedDate}`);
 
-    await page.getByRole('link', { name: 'Billing', exact: true }).click();
-    logger.debug('Navigated to billing');
+      // Download the statement
+      const downloadPromise = page.waitForEvent('download');
+      await page
+        .getByRole('row', { name: formattedDate })
+        .getByRole('button', { name: 'Download statement' })
+        .click();
+      logger.debug('Clicked download button');
 
-    await page.getByRole('tab', { name: 'Statements' }).click();
-    logger.debug('Navigated to statements');
-
-    const downloadPromise = page.waitForEvent('download');
-
-    const year = statementDate.substring(0, 4);
-    const month = statementDate.substring(4, 6);
-    const day = statementDate.substring(6, 8);
-
-    const date = new Date(`${year}-${month}-${day}`);
-    const options: Intl.DateTimeFormatOptions = {
-      year: 'numeric',
-      month: 'short',
-      day: 'numeric',
-    };
-    const formattedDate = date
-      .toLocaleDateString('en-US', options)
-      .toUpperCase();
-
-    logger.debug(`Looking for statement from ${formattedDate}`);
-
-    await page
-      .getByRole('row', { name: formattedDate })
-      .getByRole('button', { name: 'Download statement' })
-      .click();
-
-    logger.debug('Clicked download button');
-
-    const download = await downloadPromise;
-    const filePath = await download.path();
-    response.setHeader('Content-Type', 'application/pdf');
-    response.setHeader(
-      'Content-Disposition',
-      `attachment; filename=${download.suggestedFilename()}`,
-    );
-    const fileStream = fs.createReadStream(filePath);
-    fileStream.pipe(response);
-
-    logger.debug('Downloaded statement');
-
-    await context.close();
-    await browser.close();
+      await pipePdfDownloadToResponse(await downloadPromise, response);
+    });
   },
 );
