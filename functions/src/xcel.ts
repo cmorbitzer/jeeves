@@ -1,5 +1,5 @@
-import { onRequest } from 'firebase-functions/v2/https';
 import * as logger from 'firebase-functions/logger';
+import { onAuthorizedRequest } from './util/auth';
 import { pipePdfDownloadToResponse, withBrowser } from './util/browser';
 
 /**
@@ -13,7 +13,7 @@ import { pipePdfDownloadToResponse, withBrowser } from './util/browser';
  *
  * @returns The PDF file of the statement.
  */
-export const downloadXcelStatement = onRequest(
+export const downloadXcelStatement = onAuthorizedRequest(
   {
     cors: true,
     memory: '2GiB',

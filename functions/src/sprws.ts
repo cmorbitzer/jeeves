@@ -1,6 +1,6 @@
-import { onRequest } from 'firebase-functions/v2/https';
 import * as logger from 'firebase-functions/logger';
 import * as fs from 'fs';
+import { onAuthorizedRequest } from './util/auth';
 import { pipePdfDownloadToResponse, withBrowser } from './util/browser';
 
 /**
@@ -13,7 +13,7 @@ import { pipePdfDownloadToResponse, withBrowser } from './util/browser';
  *
  * @returns The PDF file of the statement.
  */
-export const downloadSprwsStatement = onRequest(
+export const downloadSprwsStatement = onAuthorizedRequest(
   {
     cors: true,
     memory: '2GiB',
