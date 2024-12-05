@@ -42,10 +42,9 @@ export const downloadXcelStatement = onRequest(
       logger.debug('Logged in');
 
       // Select the correct account to view the billing history for
-      await page
-        .getByRole('row', { name: accountNumberDigits })
-        .getByRole('link', { name: 'Manage Account' })
-        .click();
+      const accountRow = page.getByRole('row', { name: accountNumberDigits });
+      await accountRow.locator('.slds-radio_faux').click();
+      await accountRow.getByRole('link', { name: 'Manage Account' }).click();
       logger.debug('Navigated to account');
 
       // Navigate to the billing history page
