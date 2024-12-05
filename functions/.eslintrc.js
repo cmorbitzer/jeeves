@@ -25,5 +25,6 @@ module.exports = {
   plugins: ['@typescript-eslint', 'import'],
   rules: {
     'import/no-unresolved': 0,
+    'valid-jsdoc': 0,
   },
 };
